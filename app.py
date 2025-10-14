@@ -342,3 +342,25 @@ def clear_tenant(tenant_id: str) -> Dict[str, Any]:
     """Delete all data associated with a tenant. Useful for tests/demos."""
     counts = delete_tenant_data(tenant_id)
     return {"status": "ok", "deleted": counts}
+
+
+@app.get('/settings/{tenant_id}')
+def get_settings(tenant_id: str) -> Dict[str, Any]:
+    try:
+        from db import list_tenant_config
+        cfg = list_tenant_config(tenant_id)
+        return {"tenant_id": tenant_id, "config": cfg}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post('/settings/{tenant_id}')
+def set_settings(tenant_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        from db import set_tenant_config
+        # payload expected to be { key: value, ... }
+        for k, v in payload.items():
+            set_tenant_config(tenant_id, k, str(v))
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

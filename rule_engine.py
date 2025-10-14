@@ -11,7 +11,7 @@ multi‑tenant operation by storing rule sets separately per tenant.
 import json
 from typing import List, Dict, Any
 
-from db import fetch_rules
+from db import fetch_rules, get_tenant_config
 import re
 from typing import Tuple
 
@@ -382,12 +382,49 @@ def evaluate_static_rules_full(tenant_id: str, claim: Dict[str, Any]) -> List[Di
     for d in diags:
         if d in DIAG_REQUIRING_APPROVAL and not claim.get('approval_number'):
             add_violation('Technical error', f'Diagnosis {d} requires prior approval', 'Obtain prior authorization before processing')
+    # Allow per-tenant override of the approval amount threshold via tenant_config
     try:
         paid = float(claim.get('paid_amount_aed') or 0)
     except Exception:
         paid = 0
-    if paid > PAID_AMOUNT_APPROVAL_THRESHOLD and not claim.get('approval_number'):
-        add_violation('Technical error', f'Paid amount AED {paid} exceeds threshold {PAID_AMOUNT_APPROVAL_THRESHOLD}', 'Obtain approval for high-value claims')
+    try:
+        cfg = get_tenant_config(tenant_id, 'paid_amount_approval_threshold')
+        if cfg:
+            try:
+                threshold = float(cfg)
+            except Exception:
+                threshold = PAID_AMOUNT_APPROVAL_THRESHOLD
+        else:
+            threshold = PAID_AMOUNT_APPROVAL_THRESHOLD
+    except Exception:
+        threshold = PAID_AMOUNT_APPROVAL_THRESHOLD
+
+    if paid > threshold and not claim.get('approval_number'):
+        add_violation('Technical error', f'Paid amount AED {paid} exceeds threshold {threshold}', 'Obtain approval for high-value claims')
+
+    # Per-service caps: tenant can configure a JSON list under 'paid_amount_caps'
+    # Format expected: [{"service":"SRV2001","cap":150.0}, ...]
+    try:
+        caps_raw = get_tenant_config(tenant_id, 'paid_amount_caps')
+        if caps_raw:
+            try:
+                caps = json.loads(caps_raw)
+                # find matching service cap
+                svc = (service or '').strip()
+                for entry in caps:
+                    try:
+                        if str(entry.get('service') or '') == svc:
+                            cap_val = float(entry.get('cap') or 0)
+                            if cap_val > 0 and paid > cap_val and not claim.get('approval_number'):
+                                add_violation('Technical error', f'Paid amount AED {paid} exceeds cap {cap_val} for service {svc}', 'Verify service-specific cap or obtain approval')
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                # ignore malformed config
+                pass
+    except Exception:
+        pass
 
     # ID formatting
     ok, msg = validate_id_format(claim.get('national_id'), claim.get('member_id'), claim.get('facility_id'), claim.get('unique_id'))

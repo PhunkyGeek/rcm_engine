@@ -250,12 +250,34 @@
     <div id="reports" class="page-section hidden">
       <h2>Reports</h2>
       <p class="muted">Future reporting capabilities will appear here.</p>
+      <div style="margin-top:16px; background:#fff; border:1px solid var(--colour-border); padding:16px; border-radius:8px;">
+        <span class="ai-coming">AI insights coming soon...</span>
+      </div>
     </div>
 
     <!-- Settings Section -->
     <div id="settings" class="page-section hidden">
       <h2>Settings</h2>
       <p class="muted">Configure your preferences and tenant rules here.</p>
+      <div class="settings-grid">
+        <div class="settings-card">
+          <label for="settingsTenant">Tenant ID</label>
+          <div style="display:flex; gap:8px;">
+            <input id="settingsTenant" type="text" placeholder="Enter tenant id" />
+            <button class="secondary" style="margin-left:6px;" onclick="loadSettings()">Load</button>
+          </div>
+        </div>
+        <div class="settings-card">
+          <label for="paidThreshold">Paid Amount Approval Threshold (AED)</label>
+          <input id="paidThreshold" type="number" step="0.01" />
+          <div class="muted small">Adjust the threshold at which claims require prior approval.</div>
+        </div>
+      </div>
+      <div class="settings-actions">
+        <button onclick="saveSettings()">Save Settings</button>
+        <button class="secondary" onclick="document.getElementById('settingsTenant').value=''; document.getElementById('paidThreshold').value=''; document.getElementById('settingsMsg').textContent='';">Reset</button>
+        <div id="settingsMsg" class="settings-msg"></div>
+      </div>
     </div>
   </div>
 
@@ -264,5 +286,6 @@
   <script src="scripts/nav.js"></script>
   <script src="scripts/upload.js"></script>
   <script src="scripts/render.js"></script>
+  <script src="scripts/settings.js"></script>
 </body>
 </html>

@@ -116,6 +116,18 @@ def init_db(db_path: str = "rcm.db") -> None:
         );
         """
     )
+
+    # Tenant configuration table (key-value) for multi-tenant, runtime-configurable settings
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tenant_config (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id TEXT NOT NULL,
+            config_key TEXT NOT NULL,
+            config_value TEXT
+        );
+        """
+    )
     safe_commit(conn)
 
     conn.close()
@@ -391,3 +403,49 @@ def fetch_refined_entries(tenant_id: str, db_path: str = "rcm.db") -> List[Dict[
     rows = cur.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def set_tenant_config(tenant_id: str, key: str, value: str, db_path: str = "rcm.db") -> None:
+    conn = get_connection(db_path)
+    cur = conn.cursor()
+    # upsert
+    cur.execute(
+        "SELECT id FROM tenant_config WHERE tenant_id = ? AND config_key = ?",
+        (tenant_id, key),
+    )
+    r = cur.fetchone()
+    if r:
+        cur.execute(
+            "UPDATE tenant_config SET config_value = ? WHERE id = ?",
+            (value, r[0]),
+        )
+    else:
+        cur.execute(
+            "INSERT INTO tenant_config (tenant_id, config_key, config_value) VALUES (?, ?, ?)",
+            (tenant_id, key, value),
+        )
+    safe_commit(conn)
+    conn.close()
+
+
+def get_tenant_config(tenant_id: str, key: str, db_path: str = "rcm.db") -> Optional[str]:
+    conn = get_connection(db_path)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT config_value FROM tenant_config WHERE tenant_id = ? AND config_key = ?",
+        (tenant_id, key),
+    )
+    r = cur.fetchone()
+    conn.close()
+    if r:
+        return r[0]
+    return None
+
+
+def list_tenant_config(tenant_id: str, db_path: str = "rcm.db") -> Dict[str, str]:
+    conn = get_connection(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT config_key, config_value FROM tenant_config WHERE tenant_id = ?", (tenant_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return {r[0]: r[1] for r in rows}
