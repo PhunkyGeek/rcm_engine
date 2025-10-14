@@ -1,0 +1,11 @@
+[
+  {
+    "rule_id": "T001",
+    "field": "service_code",
+    "condition": "equals",
+    "value": "SC2",
+    "error_type": "Technical error",
+    "explanation": "Service code SC2 is deprecated for this payer.",
+    "recommended_action": "Replace SC2 with the current allowed service code"
+  }
+]

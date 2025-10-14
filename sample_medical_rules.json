@@ -1,0 +1,11 @@
+[
+  {
+    "rule_id": "M001",
+    "field": "service_code",
+    "condition": "equals",
+    "value": "SC3",
+    "error_type": "Medical error",
+    "explanation": "Service code SC3 requires medical review.",
+    "recommended_action": "Request medical review and attach supporting documentation"
+  }
+]

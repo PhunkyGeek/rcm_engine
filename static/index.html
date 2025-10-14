@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mini RCM Validation Engine</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" integrity="sha512-Fo3rlrZj/k7ujTTXRX4e7z8Z+f3Yw2K6XjzQFvzAlr5v7c2JXc1mT8oS4cF3rWZpQ4l0gq8sQ8z0xq8tYb7U2g==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href="styles/main.css" />
+</head>
+<body>
+  <!-- Login Page -->
+  <div id="login-page">
+    <div class="login-card">
+      <h1>Welcome to Mini RCM</h1>
+      <p class="subtext">Please sign in to your account</p>
+      <div>
+        <label for="username">Username</label>
+        <input id="username" type="text" placeholder="Enter your username" />
+      </div>
+      <div>
+        <label for="password">Password</label>
+        <input id="password" type="password" placeholder="Enter your password" />
+      </div>
+      <div class="extra-options">
+        <label><input type="checkbox" id="rememberMe" /> Remember me</label>
+        <a href="#" class="forgot-link">Forgot your password?</a>
+      </div>
+      <button id="loginBtn" onclick="loginUser()">Login</button>
+      <div id="login-error" class="error-msg" style="display: none;"></div>
+    </div>
+  </div>
+
+  <!-- Main application container (hidden until login) -->
+  <div id="main-app" class="hidden">
+    <!-- Navigation bar -->
+    <nav class="top-nav">
+      <div class="nav-left">
+        <div class="nav-brand">Claim Validator</div>
+        <ul class="nav-links" id="navLinks">
+          <li><a href="#" data-page="dashboard" class="active" onclick="showPage('dashboard')">Dashboard</a></li>
+          <li><a href="#" data-page="results" onclick="showPage('results')">Claims</a></li>
+          <li><a href="#" data-page="upload" onclick="showPage('upload')">Upload</a></li>
+          <li><a href="#" data-page="reports" onclick="showPage('reports')">Reports</a></li>
+          <li><a href="#" data-page="settings" onclick="showPage('settings')">Settings</a></li>
+        </ul>
+      </div>
+      <div class="nav-right">
+        <div class="search-box">
+          <input type="text" placeholder="Search" />
+        </div>
+
+        <!-- Avatar + Dropdown -->
+        <div class="avatar" id="avatarBtn">
+          <img src="assets/avatar.png" alt="User" />
+        </div>
+        <div id="userDropdown" class="dropdown-menu hidden">
+          <div class="dropdown-item" onclick="showPage('settings')"><i class="fa fa-cog"></i> Settings</div>
+          <div class="dropdown-item" onclick="logoutUser()"><i class="fa fa-right-from-bracket"></i> Logout</div>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Dashboard Section -->
+    <div id="dashboard" class="page-section">
+      <div class="dashboard-header">
+        <h2>Validation Engine Dashboard</h2>
+        <p class="muted">Analysis of claim adjudication outcomes.</p>
+      </div>
+      <div class="dashboard-grid">
+        <!-- Claim Counts by Error Category -->
+        <div class="chart-card">
+          <h3>Claim Counts by Error Category</h3>
+          <p class="muted small">Waterfall-style distribution.</p>
+          <div id="countsChart"></div>
+        </div>
+        <!-- Paid Amount by Error Category -->
+        <div class="chart-card">
+          <h3>Paid Amount by Error Category</h3>
+          <p class="muted small">Financial impact visual.</p>
+          <div id="amountsChart"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Upload Section -->
+    <div id="upload" class="page-section hidden">
+      <div class="upload-header">
+        <h2>Upload Your Files</h2>
+        <p>Validate your claims by uploading the necessary files below.</p>
+      </div>
+
+      <div class="file-cards">
+
+        <!-- Claims File -->
+        <div class="file-card" id="claimsCard" onclick="document.getElementById('claimsInput').click()">
+          <div class="icon-wrapper">
+            <div class="progress-circle" id="claimsCircle">
+              <svg viewBox="0 0 36 36">
+                <path class="bg"
+                  d="M18 2.0845
+                    a 15.9155 15.9155 0 0 1 0 31.831
+                    a 15.9155 15.9155 0 0 1 0 -31.831" />
+                <path class="progress" id="claimsProgressPath" stroke-dasharray="0, 100"
+                  d="M18 2.0845
+                    a 15.9155 15.9155 0 0 1 0 31.831
+                    a 15.9155 15.9155 0 0 1 0 -31.831" />
+              </svg>
+              <div class="circle-label" id="claimsPercent">0%</div>
+            </div>
+            <div class="icon">&#8682;</div>
+          </div>
+
+          <div class="card-title">Claims File</div>
+          <div class="card-desc">Upload the main claims data file (e.g., CSV, XML, EDI 837).</div>
+          <div class="browse-text">Browse files or drag and drop</div>
+          <input id="claimsInput" type="file" accept=".csv,.txt,.xml,.edi,.json" />
+
+          <!-- Progress container -->
+          <div class="progress-container" style="display:none; margin-top:8px;">
+            <div id="claimsProgress" class="progress-bar"></div>
+            <span class="progress-text"></span>
+          </div>
+
+          <div class="file-status" id="claimsStatus"></div>
+        </div>
+
+        <!-- Technical Rules -->
+        <div class="file-card" id="techCard" onclick="document.getElementById('techInput').click()">
+          <div class="icon-wrapper">
+            <div class="progress-circle" id="techCircle">
+              <svg viewBox="0 0 36 36">
+                <path class="bg"
+                  d="M18 2.0845
+                    a 15.9155 15.9155 0 0 1 0 31.831
+                    a 15.9155 15.9155 0 0 1 0 -31.831" />
+                <path class="progress" id="techProgressPath" stroke-dasharray="0, 100"
+                  d="M18 2.0845
+                    a 15.9155 15.9155 0 0 1 0 31.831
+                    a 15.9155 15.9155 0 0 1 0 -31.831" />
+              </svg>
+              <div class="circle-label" id="techPercent">0%</div>
+            </div>
+            <div class="icon">&#8651;</div>
+          </div>
+
+          <div class="card-title">Technical Rules</div>
+          <div class="card-desc">Upload technical rules (JSON, YAML, TXT).</div>
+          <div class="browse-text">Browse files or drag and drop</div>
+          <input id="techInput" type="file" accept=".json,.yaml,.yml,.txt" />
+
+          <!-- Progress container -->
+          <div class="progress-container" style="display:none; margin-top:8px;">
+            <div id="techProgress" class="progress-bar"></div>
+            <span class="progress-text"></span>
+          </div>
+
+          <div class="file-status" id="techStatus"></div>
+        </div>
+
+        <!-- Medical Rules -->
+        <div class="file-card" id="medicalCard" onclick="document.getElementById('medicalInput').click()">
+          <div class="icon-wrapper">
+            <div class="progress-circle" id="medicalCircle">
+              <svg viewBox="0 0 36 36">
+                <path class="bg"
+                  d="M18 2.0845
+                    a 15.9155 15.9155 0 0 1 0 31.831
+                    a 15.9155 15.9155 0 0 1 0 -31.831" />
+                <path class="progress" id="medicalProgressPath" stroke-dasharray="0, 100"
+                  d="M18 2.0845
+                    a 15.9155 15.9155 0 0 1 0 31.831
+                    a 15.9155 15.9155 0 0 1 0 -31.831" />
+              </svg>
+              <div class="circle-label" id="medicalPercent">0%</div>
+            </div>
+            <div class="icon">&#8853;</div>
+          </div>
+
+          <div class="card-title">Medical Rules</div>
+          <div class="card-desc">Upload medical policy rules (CSV, XLSX, JSON, TXT).</div>
+          <div class="browse-text">Browse files or drag and drop</div>
+          <input id="medicalInput" type="file" accept=".csv,.xls,.xlsx,.json,.txt" />
+
+          <!-- Progress container -->
+          <div class="progress-container" style="display:none; margin-top:8px;">
+            <div id="medProgress" class="progress-bar"></div>
+            <span class="progress-text"></span>
+          </div>
+
+          <div class="file-status" id="medicalStatus"></div>
+        </div>
+
+      </div>
+
+      <div class="upload-actions">
+        <input id="tenantId" type="text" placeholder="Tenant ID" />
+        <button onclick="validateFiles()">Validate Files</button>
+      </div>
+
+      <br />
+
+      <!-- Main upload progress -->
+      <div class="progress-container" style="display:none; margin-top:20px;">
+        <div id="mainProgressBar" class="progress-bar"></div>
+        <span class="progress-text"></span>
+      </div>
+
+      <div id="upload-message" class="muted small"></div>
+      <br />
+    </div>
+
+
+    <!-- Results Section -->
+    <div id="results" class="page-section hidden">
+      <div class="results-header">
+        <h2>Claim Validation Results</h2>
+        <div class="results-search">
+          <input id="resultsSearch" type="text" placeholder="Search by claim ID, error type, or status" oninput="filterResults()" />
+          <select id="statusFilter" onchange="filterResults()">
+            <option value="">All Status</option>
+            <option value="Validated">Validated</option>
+            <option value="Not validated">Not validated</option>
+          </select>
+          <select id="errorFilter" onchange="filterResults()">
+            <option value="">All Errors</option>
+            <option value="No error">No error</option>
+            <option value="Medical error">Medical error</option>
+            <option value="Technical error">Technical error</option>
+            <option value="Both">Both</option>
+          </select>
+        </div>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="results-table" id="resultsTable">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Error Type</th>
+              <th>Explanation</th>
+              <th>Recommended Action</th>
+              <th>Claim ID</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Reports Section -->
+    <div id="reports" class="page-section hidden">
+      <h2>Reports</h2>
+      <p class="muted">Future reporting capabilities will appear here.</p>
+    </div>
+
+    <!-- Settings Section -->
+    <div id="settings" class="page-section hidden">
+      <h2>Settings</h2>
+      <p class="muted">Configure your preferences and tenant rules here.</p>
+    </div>
+  </div>
+
+  <!-- Modular scripts -->
+  <script src="scripts/auth.js"></script>
+  <script src="scripts/nav.js"></script>
+  <script src="scripts/upload.js"></script>
+  <script src="scripts/render.js"></script>
+</body>
+</html>

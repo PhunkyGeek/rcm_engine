@@ -1,0 +1,4 @@
+claim_id,paid_amount_aed,service_code
+C001,100.50,SC1
+C002,2500,SC2
+C003,-150.75,SC3
