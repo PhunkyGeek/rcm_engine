@@ -10,10 +10,5 @@
   "routes": [
     { "src": "/static/(.*)", "dest": "static/$1" },
     { "src": "/(.*)", "dest": "app.py" }
-  ],
-  "includeFiles": [
-    "static/**/*",
-    "db.py",
-    "rule_engine.py"
   ]
 }
