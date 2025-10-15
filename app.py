@@ -60,8 +60,8 @@ from rule_engine import (
 app = FastAPI(title="Mini RCM Validation Engine")
 
 # Mount static files folder
-static_dir = os.path.join(os.path.dirname(__file__), "static")
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
+static_dir = os.path.join(os.path.dirname(__file__), "public")
+app.mount("/public", StaticFiles(directory=static_dir), name="public")
 
 # Serve the index.html for root route
 @app.get("/")
