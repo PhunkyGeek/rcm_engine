@@ -245,23 +245,21 @@ def evaluate_llm_rules(
     Engine pattern allows the rule evaluation strategy to be
     replaced without affecting the rest of the system【106747799892513†L216-L266】.
     """
-    # Try to call an external LLM (OpenAI) if configured. If not available
-    # fall back to a deterministic heuristic that produces human-friendly
-    # suggestions which simulate what an LLM might add.
-    # Prefer the dedicated wrapper which includes rate-limiting and error logging.
+    # Try to call a configurable LLM provider if available. The provider is
+    # chosen by the environment variable LLM_PROVIDER (defaults to 'gemini').
     try:
-        from llm import call_openai_chat
+        from llm_provider import evaluate_claim_llm
     except Exception:
-        call_openai_chat = None
+        evaluate_claim_llm = None
 
-    if call_openai_chat:
+    if evaluate_claim_llm:
         try:
-            res = call_openai_chat(claim, model=llm_model or "gpt-3.5-turbo", temperature=temperature or 0.0)
+            res = evaluate_claim_llm(claim, model=llm_model or "gemini-2.5-flash", temperature=temperature or 0.0)
             if res:
-                # The wrapper returns a list of dicts with keys error_type, explanation, recommended_action
+                # The provider returns a list of dicts with keys error_type, explanation, recommended_action
                 return res
         except Exception as e:
-            print("[rule_engine] LLM wrapper raised an exception:", e)
+            print("[rule_engine] LLM provider raised an exception:", e)
             # fall through to heuristic
             pass
 
