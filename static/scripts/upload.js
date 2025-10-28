@@ -61,8 +61,8 @@ window.validateFiles = async function validateFiles() {
     uploadMsg.style.color = 'var(--colour-info)';
     uploadMsg.textContent = 'Uploading files…';
 
-    const techText = techFile ? await techFile.text() : null;
-    const medText = medFile ? await medFile.text() : null;
+  const techText = techFile ? { filename: techFile.name, content: await fileToBase64(techFile) } : null;
+  const medText = medFile ? { filename: medFile.name, content: await fileToBase64(medFile) } : null;
 
     const claimsB64 = await new Promise((resolve, reject) => {
       const reader = new FileReader();

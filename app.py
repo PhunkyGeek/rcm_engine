@@ -127,20 +127,147 @@ async def upload_files(payload: dict):
         insert_claims(tenant_id, claims)
         print(f"✅ Inserted {len(claims)} claims for {tenant_id}")
 
-        def parse_rules(raw_text, rule_type):
-            if not raw_text:
+        def try_parse_json_or_rules(text, rule_type):
+            # Try JSON first, then a simple rules-text format
+            if not text:
                 return []
             try:
-                data = json.loads(raw_text)
+                data = json.loads(text)
                 if isinstance(data, dict):
                     data = [data]
                 elif not isinstance(data, list):
                     raise ValueError("Unexpected format")
-                print(f"✅ Parsed {len(data)} {rule_type} rules")
+                print(f"✅ Parsed {len(data)} {rule_type} rules (from JSON)")
                 return data
-            except Exception as e:
-                print(f"⚠️ Could not parse {rule_type} rules: {e}")
+            except Exception:
+                # fallback to parse_rules_text which supports delimiter-based rules
+                try:
+                    return parse_rules_text(text)
+                except Exception as e:
+                    print(f"⚠️ Could not parse {rule_type} rules as text: {e}")
+                    return []
+
+        def parse_rules(upload_obj, rule_type):
+            """Accept either raw text/JSON or a dict {filename, content(base64)} and try to extract rules.
+            Supports: .json, .txt, .csv, .yaml/.yml, .pdf, .docx, .xls/.xlsx where possible.
+            """
+            if not upload_obj:
                 return []
+
+            # If already a plain string, try parsing directly
+            if isinstance(upload_obj, str):
+                return try_parse_json_or_rules(upload_obj, rule_type)
+
+            # Expect dict with filename and base64 content
+            if isinstance(upload_obj, dict) and upload_obj.get('content'):
+                fname = upload_obj.get('filename') or ''
+                ext = fname.split('.')[-1].lower() if '.' in fname else ''
+                b = None
+                try:
+                    b = base64.b64decode(upload_obj.get('content'))
+                except Exception:
+                    # content might already be raw text
+                    try:
+                        txt = str(upload_obj.get('content'))
+                        return try_parse_json_or_rules(txt, rule_type)
+                    except Exception:
+                        return []
+
+                # Handle common types
+                if ext in ('json', 'txt', 'csv', 'yaml', 'yml', 'xml', 'edi'):
+                    try:
+                        text = b.decode('utf-8')
+                    except Exception:
+                        text = b.decode('latin-1', errors='replace')
+                    if ext == 'csv':
+                        try:
+                            reader = csv.DictReader(io.StringIO(text))
+                            return [row for row in reader if any(row.values())]
+                        except Exception:
+                            return try_parse_json_or_rules(text, rule_type)
+                    return try_parse_json_or_rules(text, rule_type)
+
+                if ext == 'pdf':
+                    try:
+                        try:
+                            from PyPDF2 import PdfReader
+                        except Exception:
+                            PdfReader = None
+                        if PdfReader:
+                            reader = PdfReader(io.BytesIO(b))
+                            pages = [p.extract_text() or '' for p in reader.pages]
+                            text = '\n'.join(pages)
+                            return try_parse_json_or_rules(text, rule_type)
+                    except Exception as e:
+                        print('⚠️ PDF parse failed:', e)
+                        return []
+
+                if ext == 'docx':
+                    try:
+                        try:
+                            import docx
+                        except Exception:
+                            docx = None
+                        if docx:
+                            document = docx.Document(io.BytesIO(b))
+                            text = '\n'.join(p.text for p in document.paragraphs if p.text)
+                            return try_parse_json_or_rules(text, rule_type)
+                    except Exception as e:
+                        print('⚠️ docx parse failed:', e)
+                        return []
+
+                if ext in ('xls', 'xlsx'):
+                    try:
+                        try:
+                            import openpyxl
+                        except Exception:
+                            openpyxl = None
+                        if openpyxl:
+                            wb = openpyxl.load_workbook(io.BytesIO(b), data_only=True)
+                            ws = wb.active
+                            rows = list(ws.rows)
+                            if not rows:
+                                return []
+                            headers = [cell.value for cell in rows[0]]
+                            data = []
+                            for row in rows[1:]:
+                                rowdict = {}
+                                for h, cell in zip(headers, row):
+                                    rowdict[h if h is not None else ''] = cell.value
+                                data.append(rowdict)
+                            return data
+                    except Exception as e:
+                        print('⚠️ excel parse failed:', e)
+                        return []
+
+                if ext == 'doc':
+                    # Best-effort: try to use antiword or textract if available on system
+                    try:
+                        import tempfile, subprocess
+                        with tempfile.NamedTemporaryFile(delete=False, suffix='.doc') as tf:
+                            tf.write(b)
+                            tmpname = tf.name
+                        try:
+                            out = subprocess.check_output(['antiword', tmpname])
+                            text = out.decode('utf-8', errors='replace')
+                            return try_parse_json_or_rules(text, rule_type)
+                        except Exception:
+                            # antiword not available; skip
+                            print('⚠️ antiword not available to parse .doc files')
+                            return []
+                    except Exception as e:
+                        print('⚠️ .doc parse failed:', e)
+                        return []
+
+                # Unknown binary type: try decode and parse as text
+                try:
+                    text = b.decode('utf-8')
+                except Exception:
+                    text = b.decode('latin-1', errors='replace')
+                return try_parse_json_or_rules(text, rule_type)
+
+            # Unknown format
+            return []
 
         tech_rules = parse_rules(tech_rules_raw, "technical")
         med_rules = parse_rules(med_rules_raw, "medical")
