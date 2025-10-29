@@ -232,7 +232,7 @@ def evaluate_static_rules(
 
 
 def evaluate_llm_rules(
-    claim: Dict[str, Any], llm_model: str = "", temperature: float = 0.0
+    tenant_id: str, claim: Dict[str, Any], llm_model: str = "", temperature: float = 0.0
 ) -> List[Dict[str, str]]:
     """Placeholder for LLM based rule evaluation.
 
@@ -254,7 +254,24 @@ def evaluate_llm_rules(
 
     if evaluate_claim_llm:
         try:
-            res = evaluate_claim_llm(claim, model=llm_model or "gemini-2.5-flash", temperature=temperature or 0.0)
+            # Fetch tenant-stored rules so the LLM has the exact uploaded
+            # technical and medical rule sets available for evaluation.
+            try:
+                tech_rules = fetch_rules(tenant_id, rule_type='technical')
+            except Exception:
+                tech_rules = []
+            try:
+                med_rules = fetch_rules(tenant_id, rule_type='medical')
+            except Exception:
+                med_rules = []
+
+            res = evaluate_claim_llm(
+                claim,
+                model=llm_model or "gemini-2.5-flash",
+                temperature=temperature or 0.0,
+                technical_rules=tech_rules,
+                medical_rules=med_rules,
+            )
             if res:
                 # The provider returns a list of dicts with keys error_type, explanation, recommended_action
                 return res

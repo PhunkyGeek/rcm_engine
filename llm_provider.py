@@ -66,7 +66,13 @@ def _heuristic_suggestions(claim: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
-def evaluate_claim_llm(claim: Dict[str, Any], model: Optional[str] = None, temperature: float = 0.0) -> List[Dict[str, str]]:
+def evaluate_claim_llm(
+    claim: Dict[str, Any],
+    model: Optional[str] = None,
+    temperature: float = 0.0,
+    technical_rules: Optional[List[Dict[str, Any]]] = None,
+    medical_rules: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, str]]:
     """Evaluate a claim via a configurable LLM provider.
 
     Parameters
@@ -98,7 +104,7 @@ def evaluate_claim_llm(claim: Dict[str, Any], model: Optional[str] = None, tempe
                     # ignore configure errors; some environments pick key from env
                     pass
 
-                prompt = _build_prompt_from_claim(claim)
+                prompt = _build_prompt_from_claim(claim, technical_rules=technical_rules, medical_rules=medical_rules)
 
                 # Try the chat completions endpoint which is the recommended
                 # surface for Gemini-style chat models.
@@ -136,40 +142,30 @@ def evaluate_claim_llm(claim: Dict[str, Any], model: Optional[str] = None, tempe
                 # SDK not installed or import failed; fall back to heuristic
                 pass
 
-    # Optionally support OpenAI if requested
-    if provider in ("openai",) or os.getenv('OPENAI_API_KEY'):
-        try:
-            import openai
-            openai_api_key = os.getenv('OPENAI_API_KEY')
-            if openai_api_key:
-                openai.api_key = openai_api_key
-                prompt = _build_prompt_from_claim(claim)
-                # Use ChatCompletion if available
-                if hasattr(openai, 'ChatCompletion'):
-                    resp = openai.ChatCompletion.create(model=model or 'gpt-4o-mini', messages=[{"role":"user","content":prompt}], temperature=temperature)
-                    choices = resp.get('choices') or []
-                    if choices:
-                        txt = choices[0].get('message', {}).get('content') or str(choices[0])
-                        return _parse_text_to_suggestions(txt)
-                else:
-                    # Fallback to completion endpoint
-                    resp = openai.Completion.create(model=model or 'text-davinci-003', prompt=prompt, temperature=temperature, max_tokens=400)
-                    txt = resp.get('choices', [{}])[0].get('text', '')
-                    return _parse_text_to_suggestions(txt)
-        except Exception:
-            logger.warning("OpenAI provider call failed; falling back to heuristic", exc_info=True)
-
     # Last-resort: return deterministic heuristic suggestions
     return _heuristic_suggestions(claim)
 
 
-def _build_prompt_from_claim(claim: Dict[str, Any]) -> str:
+def _build_prompt_from_claim(claim: Dict[str, Any], technical_rules: Optional[List[Dict[str, Any]]] = None, medical_rules: Optional[List[Dict[str, Any]]] = None) -> str:
     # Keep prompt short and structured to make parsing easy if a real model is used.
     parts = []
     for k in ("claim_id", "service_code", "facility_id", "encounter_type", "diagnosis_codes", "paid_amount_aed", "approval_number"):
         v = claim.get(k)
         parts.append(f"{k}: {v}")
-    parts.append("\nPlease list any likely technical or medical errors found in the claim and a single recommended action for each as JSON array of objects with keys: error_type, explanation, recommended_action.")
+    # Attach rules context if present. Include a compact JSON representation
+    # to help the model reason with the dynamically uploaded rule sets.
+    if technical_rules:
+        try:
+            parts.append("\nTECHNICAL_RULES:\n" + json.dumps(technical_rules, ensure_ascii=False))
+        except Exception:
+            parts.append("\nTECHNICAL_RULES: (unserializable)")
+    if medical_rules:
+        try:
+            parts.append("\nMEDICAL_RULES:\n" + json.dumps(medical_rules, ensure_ascii=False))
+        except Exception:
+            parts.append("\nMEDICAL_RULES: (unserializable)")
+
+    parts.append("\nPlease list any likely technical or medical errors found in the claim given the rules above and a single recommended action for each as a JSON array of objects with keys: error_type, explanation, recommended_action.")
     return "\n".join(parts)
 
 

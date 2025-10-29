@@ -299,59 +299,38 @@ def validate_claims(tenant_id: str) -> Dict[str, Any]:
     category_totals = {"No error": 0.0, "Medical error": 0.0, "Technical error": 0.0, "Both": 0.0}
 
     for claim in claims:
-        # Evaluate DB-persisted rules first
-        db_errors = evaluate_static_rules(tenant_id, claim)
-        # Evaluate deterministic static checks (medical/technical spec)
-        spec_errors = evaluate_static_rules_full(tenant_id, claim)
-        # Merge errors (flatten)
-        errors = (db_errors or []) + (spec_errors or [])
-        # LLM-based evaluation (non-blocking; currently returns [])
+        db_errors = evaluate_static_rules(tenant_id, claim) or []
+        spec_errors = evaluate_static_rules_full(tenant_id, claim) or []
+        errors = db_errors + spec_errors
+
+        # Optional: include LLM-based rules if available
         try:
-            llm_violations = evaluate_llm_rules(claim)
-            if llm_violations:
-                errors += llm_violations
+            llm_errors = evaluate_llm_rules(tenant_id, claim) or []
+            errors += llm_errors
         except Exception:
             pass
-        # If static rules produced no errors, we still apply a few basic
-        # sanity checks so the UI shows something useful out-of-the-box.
-        if not errors:
-            # Example basic rule: negative paid amounts indicate an issue.
-            try:
-                paid_val = float(claim.get("paid_amount_aed") or 0)
-            except Exception:
-                paid_val = 0
 
-            if paid_val < 0:
-                # Populate a synthetic rule violation so the frontend has
-                # error_type, explanation and recommended_action to display.
-                status = "Not validated"
-                error_type = "Technical error"
-                explanation = "- Paid amount is negative; possible refund or data error."
-                recommended_action = "Investigate payment record; correct negative amount"
-                errors = [
-                    {
-                        "error_type": error_type,
-                        "explanation": explanation.replace('^- ', ''),
-                        "recommended_action": recommended_action,
-                    }
-                ]
-            else:
-                status, error_type, explanation, recommended_action = "Validated", "No error", "", ""
+        # Determine result based on collected errors
+        if len(errors) == 0:
+            status = "Validated"
+            error_type = "No error"
+            explanation = "No issues"
+            recommended_action = "None"
         else:
             status = "Not validated"
-            types = {e["error_type"] for e in errors}
+            types = {e.get("error_type", "Technical error") for e in errors}
             if types == {"Medical error"}:
                 error_type = "Medical error"
             elif types == {"Technical error"}:
                 error_type = "Technical error"
             else:
                 error_type = "Both"
-            explanation = "\n".join(f"- {e['explanation']}" for e in errors)
-            recs = list({e["recommended_action"] for e in errors})
+
+            explanation = "\n".join(f"- {e.get('explanation', '')}" for e in errors)
+            recs = list({e.get("recommended_action", "Review claim") for e in errors})
             recommended_action = "; ".join(recs)
 
         update_claim_result(tenant_id, claim["claim_id"], status, error_type, explanation, recommended_action)
-        # Persist a refined view for analytics/PII-free consumption
         try:
             from db import save_refined_entry
             save_refined_entry(tenant_id, claim.get("claim_id"), status, error_type, explanation, recommended_action)
@@ -362,39 +341,28 @@ def validate_claims(tenant_id: str) -> Dict[str, Any]:
         paid = float(claim.get("paid_amount_aed") or 0)
         category_totals[error_type] += paid
 
-    # Persist metrics
     metrics = [(cat, count, category_totals[cat]) for cat, count in category_counts.items()]
     save_metrics(tenant_id, metrics)
 
-    # Fetch updated results
     updated_claims = fetch_claims(tenant_id)
     updated_metrics = fetch_metrics(tenant_id)
 
     formatted_metrics = []
     for m in updated_metrics:
         if isinstance(m, dict):
-            amt = m.get("amount")
-            if amt is None:
-                amt = m.get("total_paid")
-            formatted_metrics.append({
-                "category": m.get("category"),
-                "count": int(m.get("count", 0)),
-                "amount": float(amt or 0)
-            })
+            amt = m.get("amount") or m.get("total_paid", 0)
+            formatted_metrics.append({"category": m.get("category"), "count": int(m.get("count", 0)), "amount": float(amt)})
         else:
-            formatted_metrics.append({
-                "category": m[0],
-                "count": int(m[1]),
-                "amount": float(m[2] or 0)
-            })
+            formatted_metrics.append({"category": m[0], "count": int(m[1]), "amount": float(m[2] or 0)})
 
     return {
         "processed": len(claims),
         "claims": updated_claims,
         "metrics": formatted_metrics,
         "category_counts": category_counts,
-        "category_totals": category_totals
+        "category_totals": category_totals,
     }
+
 
 
 @app.get('/refined/{tenant_id}')
