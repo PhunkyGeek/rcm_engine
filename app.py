@@ -314,8 +314,11 @@ def validate_claims(tenant_id: str) -> Dict[str, Any]:
         if len(errors) == 0:
             status = "Validated"
             error_type = "No error"
-            explanation = "No issues"
-            recommended_action = "None"
+            # For fully passing claims store empty explanation/action so the
+            # UI/backend don't show misleading "error" status with a
+            # "No issues" explanation. Empty strings represent a clean pass.
+            explanation = ""
+            recommended_action = ""
         else:
             status = "Not validated"
             types = {e.get("error_type", "Technical error") for e in errors}

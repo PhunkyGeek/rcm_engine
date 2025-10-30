@@ -22,10 +22,18 @@ import json
 import time
 import traceback
 import logging
+import requests
+from threading import Lock
 
 logger = logging.getLogger(__name__)
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+
+# ---- simple in-memory throttle guard ----
+_last_request_time = 0.0
+_request_lock = Lock()
+_MIN_INTERVAL = 2.0  # seconds between Gemini calls
 
 
 def _heuristic_suggestions(claim: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -66,6 +74,73 @@ def _heuristic_suggestions(claim: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
+# ---------------- STATIC RULE FALLBACK ----------------
+def _evaluate_static_rules(
+    claim: Dict[str, Any],
+    technical_rules: Optional[List[Dict[str, Any]]],
+    medical_rules: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, str]]:
+    """Static rule evaluation engine (no LLM required).
+
+    This applies simple condition checks present in the uploaded rule
+    JSONs and returns suggestions using the same output shape as the LLM.
+    If no static rule matches are found it falls back to heuristics.
+    """
+    suggestions: List[Dict[str, str]] = []
+
+    def _safe_get_float(val, default=0.0):
+        try:
+            return float(val)
+        except Exception:
+            return default
+
+    def val(key):
+        return str(claim.get(key, "")).lower().strip()
+
+    rulesets: List[Dict[str, Any]] = []
+    if technical_rules:
+        rulesets.extend(technical_rules)
+    if medical_rules:
+        rulesets.extend(medical_rules)
+
+    for rule in rulesets:
+        try:
+            cond = (rule.get("condition") or "").lower()
+            desc = rule.get("explanation") or rule.get("description") or ""
+            action = rule.get("recommended_action") or rule.get("action") or "Review claim."
+
+            # Approval-related rule
+            if "approval" in cond and not claim.get("approval_number"):
+                suggestions.append({
+                    "error_type": rule.get("error_type") or "Technical error",
+                    "explanation": desc or "Missing approval number for this rule.",
+                    "recommended_action": action,
+                })
+
+            # Encounter type mismatch (e.g., inpatient required)
+            elif "inpatient" in cond and val("encounter_type") != "inpatient":
+                suggestions.append({
+                    "error_type": rule.get("error_type") or "Medical error",
+                    "explanation": desc or "Rule expects inpatient encounter type.",
+                    "recommended_action": action,
+                })
+
+            # Paid amount threshold
+            elif "paid_amount" in cond or "amount" in cond or "threshold" in rule:
+                threshold = _safe_get_float(rule.get("threshold") or rule.get("value") or 250)
+                if _safe_get_float(claim.get("paid_amount_aed") or 0) > threshold:
+                    suggestions.append({
+                        "error_type": rule.get("error_type") or "Technical error",
+                        "explanation": desc or f"Claim exceeds threshold AED {threshold}.",
+                        "recommended_action": action,
+                    })
+
+        except Exception as e:
+            logger.warning("Static rule evaluation error: %s", e)
+
+    return suggestions or _heuristic_suggestions(claim)
+
+
 def evaluate_claim_llm(
     claim: Dict[str, Any],
     model: Optional[str] = None,
@@ -86,61 +161,85 @@ def evaluate_claim_llm(
     """
     provider = LLM_PROVIDER
 
-    # Prefer Gemini (Google generative models) if configured. Use the
-    # official `google.generativeai` SDK when available and an API key is
-    # provided. The code below uses the common chat/completions interface
-    # used by that SDK; if any step fails we fall back to the deterministic
-    # heuristic suggestions.
-    if provider in ("gemini", "google"):
-        api_key = os.getenv('GEMINI_API_KEY') or os.getenv('GOOGLE_API_KEY')
-        if api_key:
+    # Prefer Gemini (Google generative models) only. If GEMINI_API_KEY is
+    # not set we log and fall back to heuristics. Use the REST API when the
+    # Python SDK surface is unreliable in the runtime environment.
+    # If provider isn't Gemini, use static rules directly
+    if provider not in ("gemini", "google"):
+        return _evaluate_static_rules(claim, technical_rules, medical_rules)
+
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        logger.warning("No GEMINI_API_KEY found; using static rules.")
+        return _evaluate_static_rules(claim, technical_rules, medical_rules)
+
+    try:
+        # --- Rate limit enforcement (local safeguard) ---
+        global _last_request_time
+        with _request_lock:
+            now = time.time()
+            if now - _last_request_time < _MIN_INTERVAL:
+                logger.warning("Gemini locally throttled; using static rules instead.")
+                return _evaluate_static_rules(claim, technical_rules, medical_rules)
+            _last_request_time = now
+
+        prompt = _build_prompt_from_claim(claim, technical_rules=technical_rules, medical_rules=medical_rules)
+        model_name = model or "gemini-2.5-flash"
+
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt}],
+                }
+            ],
+            "generationConfig": {
+                "temperature": float(temperature or 0.0),
+                "maxOutputTokens": 800,
+            },
+        }
+
+        res = requests.post(
+            f"{GEMINI_URL}?key={api_key}",
+            headers={"Content-Type": "application/json"},
+            json=payload,
+            timeout=60,
+        )
+        # Handle quota / rate-limit responses explicitly
+        if res.status_code == 429:
+            # Quota exceeded or rate-limited by Google
             try:
-                import google.generativeai as genai
-                # Configure with the provided API key
-                try:
-                    if hasattr(genai, 'configure'):
-                        genai.configure(api_key=api_key)
-                except Exception:
-                    # ignore configure errors; some environments pick key from env
-                    pass
-
-                prompt = _build_prompt_from_claim(claim, technical_rules=technical_rules, medical_rules=medical_rules)
-
-                # Try the chat completions endpoint which is the recommended
-                # surface for Gemini-style chat models.
-                try:
-                    # Newer SDKs may expose chat.completions.create
-                    if hasattr(genai, 'chat') and hasattr(genai.chat, 'completions') and hasattr(genai.chat.completions, 'create'):
-                        resp = genai.chat.completions.create(model=model or 'gemini-2.5-flash', messages=[{"role": "user", "content": prompt}], temperature=temperature)
-                    else:
-                        # Fallback to older helper names
-                        resp = genai.chat.create(model=model or 'gemini-2.5-flash', messages=[{"role": "user", "content": prompt}], temperature=temperature)
-
-                    # Extract textual content robustly from SDK response
-                    txt = ''
-                    try:
-                        # Preferred: candidates/content
-                        if hasattr(resp, 'candidates'):
-                            cand = resp.candidates[0]
-                            # candidate may be an object with content attr
-                            txt = getattr(cand, 'content', None) or str(cand)
-                        elif isinstance(resp, dict) and 'candidates' in resp:
-                            cand = resp['candidates'][0]
-                            txt = cand.get('content') or str(cand)
-                        elif hasattr(resp, 'last'):
-                            txt = str(resp.last)
-                        else:
-                            txt = str(resp)
-                    except Exception:
-                        txt = str(resp)
-
-                    return _parse_text_to_suggestions(txt)
-                except Exception:
-                    # If the SDK call or parsing fails, log a warning and fall back
-                    logger.warning("Gemini SDK call or parsing failed; falling back to heuristic", exc_info=True)
+                err = res.json().get("error", {})
+                err_msg = err.get("message", "Quota exceeded")
             except Exception:
-                # SDK not installed or import failed; fall back to heuristic
-                pass
+                err_msg = "Quota exceeded"
+            logger.error("Gemini quota exceeded: %s", err_msg)
+            # Back off temporarily: set next allowed time further in future
+            with _request_lock:
+                _last_request_time = time.time() + 60
+            # Switch to static rule evaluation when quota exhausted
+            return _evaluate_static_rules(claim, technical_rules, medical_rules)
+
+        if not res.ok:
+            logger.error(f"Gemini HTTP error {res.status_code}: {res.text}")
+            return _evaluate_static_rules(claim, technical_rules, medical_rules)
+
+        data = res.json()
+        text = (
+            data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+            .strip()
+        )
+
+        parsed = _parse_text_to_suggestions(text)
+        # If parsing failed or returned nothing, fall back to static rules
+        return parsed or _evaluate_static_rules(claim, technical_rules, medical_rules)
+
+    except Exception as e:
+        logger.warning("Gemini call failed; reverting to static rules: %s", e, exc_info=True)
+        return _evaluate_static_rules(claim, technical_rules, medical_rules)
 
     # Last-resort: return deterministic heuristic suggestions
     return _heuristic_suggestions(claim)
@@ -170,7 +269,11 @@ def _build_prompt_from_claim(claim: Dict[str, Any], technical_rules: Optional[Li
 
 
 def _parse_text_to_suggestions(text: str) -> List[Dict[str, str]]:
-    """Try to parse model output as JSON, or fall back to heuristic if parsing fails."""
+    """Try to parse model output as JSON.
+
+    Important: this parser returns an empty list when parsing fails so the
+    caller can decide whether to fall back to static rules or heuristics.
+    """
     try:
         # Model may return JSON directly — try to find the first JSON array
         text = text.strip()
@@ -189,8 +292,8 @@ def _parse_text_to_suggestions(text: str) -> List[Dict[str, str]]:
             return out
     except Exception:
         pass
-    # Could not parse — return heuristic
-    return _heuristic_suggestions({})
+    # Could not parse — return empty to let caller choose fallback
+    return []
 
 
 if __name__ == '__main__':
